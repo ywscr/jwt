@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Linq;
 using JWT.Algorithms;
 using JWT.Serializers;
@@ -9,7 +8,7 @@ using static JWT.Internal.EncodingHelper;
 namespace JWT.Builder
 {
     /// <summary>
-    /// Build and decode JWT with Fluent API.
+    /// Encode and decode JWT with Fluent API.
     /// </summary>
     public sealed class JwtBuilder
     {
@@ -24,6 +23,7 @@ namespace JWT.Builder
         private IDateTimeProvider _dateTimeProvider = new UtcDateTimeProvider();
 
         private IJwtAlgorithm _algorithm;
+        private IAlgorithmFactory _algFactory;
         private byte[][] _secrets;
         private bool _verify;
 
@@ -33,7 +33,7 @@ namespace JWT.Builder
         /// <param name="name">Well-known header name</param>
         /// <param name="value">The value you want give to the header</param>
         /// <returns>Current builder instance</returns>
-        public JwtBuilder AddHeader(HeaderName name, string value)
+        public JwtBuilder AddHeader(HeaderName name, object value)
         {
             _jwt.Header.Add(name.GetHeaderName(), value);
             return this;
@@ -50,38 +50,6 @@ namespace JWT.Builder
             _jwt.Payload.Add(name, value);
             return this;
         }
-
-        /// <summary>
-        /// Add string claim to the JWT.
-        /// </summary>
-        /// <param name="name">Claim name</param>
-        /// <param name="value">Claim value</param>
-        /// <returns>Current builder instance</returns>
-        public JwtBuilder AddClaim(string name, string value) =>
-            AddClaim(name, (object)value);
-
-        /// <summary>
-        /// Add several claims to the JWT
-        /// </summary>
-        /// <param name="claims">IDictionary of claims to be added</param>
-        /// <returns>Current builder instance</returns>
-        public JwtBuilder AddClaims(IDictionary<string, object> claims)
-        {
-            foreach (var entry in claims)
-            {
-                AddClaim(entry.Key, entry.Value);
-            }
-            return this;
-        }
-
-        /// <summary>
-        /// Adds well-known claim to the JWT.
-        /// </summary>
-        /// <param name="name">Well-known claim name</param>
-        /// <param name="value">Claim value</param>
-        /// <returns>Current builder instance</returns>
-        public JwtBuilder AddClaim(ClaimName name, string value) =>
-            AddClaim(name.GetPublicClaimName(), value);
 
         /// <summary>
         /// Sets JWT serializer.
@@ -156,12 +124,19 @@ namespace JWT.Builder
         }
 
         /// <summary>
+        /// Sets JWT algorithm factory.
+        /// </summary>
+        /// <returns>Current builder instance.</returns>
+        public JwtBuilder WithAlgorithmFactory(IAlgorithmFactory algFactory)
+        {
+            _algFactory = algFactory;
+            return this;
+        }
+
+        /// <summary>
         /// Sets JWT algorithm.
         /// </summary>
-        /// <remarks>
-        /// Required to create new token.
-        /// </remarks>
-        /// <returns>Current builder instance</returns>
+        /// <returns>Current builder instance.</returns>
         public JwtBuilder WithAlgorithm(IJwtAlgorithm algorithm)
         {
             _algorithm = algorithm;
@@ -219,18 +194,15 @@ namespace JWT.Builder
         }
 
         /// <summary>
-        /// Builds a token using the supplied dependencies.
+        /// Encodes a token using the supplied dependencies.
         /// </summary>
         /// <returns>The generated JWT</returns>
         /// <exception cref="InvalidOperationException">Thrown if either algorithm, serializer, encoder or secret is null</exception>
-        public string Build()
+        public string Encode()
         {
-            if (_encoder is null)
-                TryCreateEncoder();
+            EnsureCanEncode();
 
-            EnsureCanBuild();
-
-            return _encoder.Encode(_jwt.Header, _jwt.Payload, _secrets[0]);
+            return _encoder.Encode(_jwt.Header, _jwt.Payload, _secrets?[0]);
         }
 
         /// <summary>
@@ -240,10 +212,31 @@ namespace JWT.Builder
         /// <returns>The JSON payload</returns>
         public string Decode(string token)
         {
-            if (_decoder is null)
-                TryCreateDecoder();
+            EnsureCanDecode();
 
             return _verify ? _decoder.Decode(token, _secrets, _verify) : _decoder.Decode(token);
+        }
+
+        /// <summary>
+        /// Given a JWT, decodes it and return the header.
+        /// </summary>
+        /// <param name="token">The JWT</param>
+        public string DecodeHeader(string token)
+        {
+            EnsureCanDecode();
+
+            return _decoder.DecodeHeader(token);
+        }
+
+        /// <summary>
+        /// Given a JWT, decodes it and return the header.
+        /// </summary>
+        /// <param name="token">The JWT</param>
+        public T DecodeHeader<T>(string token)
+        {
+            EnsureCanDecode();
+
+            return _decoder.DecodeHeader<T>(token);
         }
 
         /// <summary>
@@ -253,15 +246,14 @@ namespace JWT.Builder
         /// <returns>The payload converted to <see cref="T" /></returns>
         public T Decode<T>(string token)
         {
-            if (_decoder is null)
-                TryCreateDecoder();
+            EnsureCanDecode();
 
-            return _verify ? _decoder.DecodeToObject<T>(token, _secrets[0], _verify) : _decoder.DecodeToObject<T>(token);
+            return _verify ? _decoder.DecodeToObject<T>(token, _secrets, _verify) : _decoder.DecodeToObject<T>(token);
         }
 
         private void TryCreateEncoder()
         {
-            if (_algorithm is null)
+            if (_algorithm is null && _algFactory is null)
                 throw new InvalidOperationException($"Can't instantiate {nameof(JwtEncoder)}. Call {nameof(WithAlgorithm)}.");
             if (_serializer is null)
                 throw new InvalidOperationException($"Can't instantiate {nameof(JwtEncoder)}. Call {nameof(WithSerializer)}");
@@ -277,19 +269,20 @@ namespace JWT.Builder
 
             if (_serializer is null)
                 throw new InvalidOperationException($"Can't instantiate {nameof(JwtDecoder)}. Call {nameof(WithSerializer)}.");
-            if (_validator is null)
-                throw new InvalidOperationException($"Can't instantiate {nameof(JwtDecoder)}. Call {nameof(WithValidator)}.");
             if (_urlEncoder is null)
                 throw new InvalidOperationException($"Can't instantiate {nameof(JwtDecoder)}. Call {nameof(WithUrlEncoder)}.");
 
-            EnsureCanDecode();
-
-            _decoder = new JwtDecoder(_serializer, _validator, _urlEncoder);
+            if (_algorithm is object)
+                _decoder = new JwtDecoder(_serializer, _validator, _urlEncoder, _algorithm);
+            else if (_algFactory is object)
+                _decoder = new JwtDecoder(_serializer, _validator, _urlEncoder, _algFactory);
+            else if (!_verify)
+                _decoder = new JwtDecoder(_serializer, _urlEncoder);
         }
 
         private void TryCreateValidator()
         {
-            if (_validator != null)
+            if (_validator is object)
                 return;
 
             if (_serializer is null)
@@ -300,63 +293,57 @@ namespace JWT.Builder
             _validator = new JwtValidator(_serializer, _dateTimeProvider);
         }
 
-        private void EnsureCanBuild()
+        private void EnsureCanEncode()
         {
-            if (!CanBuild())
-                throw new InvalidOperationException("Can't build a token. Check if you have call all of the followng methods:\r\n" +
-                                                    $"-{nameof(WithAlgorithm)}" + Environment.NewLine +
-                                                    $"-{nameof(WithSerializer)}" + Environment.NewLine +
-                                                    $"-{nameof(WithUrlEncoder)}.");
+            if (_encoder is null)
+                TryCreateEncoder();
 
-            if (!HasOnlyOneSecret())
-                throw new InvalidOperationException("You can't provide more than one secret to use for encoding.");
+            if (!CanEncode())
+            {
+                throw new InvalidOperationException(
+                    "Can't encode a token. Check if you have call all of the following methods:" + Environment.NewLine +
+                    $"-{nameof(WithAlgorithm)}" + Environment.NewLine +
+                    $"-{nameof(WithSerializer)}" + Environment.NewLine +
+                    $"-{nameof(WithUrlEncoder)}.");
+            }
         }
 
         private void EnsureCanDecode()
         {
+            if (_decoder is null)
+                TryCreateDecoder();
+
             if (!CanDecode())
-                throw new InvalidOperationException("Can't decode a token. Check if you have call all of the following methods:" + Environment.NewLine +
-                                                    $"-{nameof(WithSerializer)}" + Environment.NewLine +
-                                                    $"-{nameof(WithValidator)}" + Environment.NewLine +
-                                                    $"-{nameof(WithUrlEncoder)}.");
+            {
+                throw new InvalidOperationException(
+                    "Can't decode a token. Check if you have call all of the following methods:" + Environment.NewLine +
+                    $"-{nameof(WithSerializer)}" + Environment.NewLine +
+                    $"-{nameof(WithValidator)}" + Environment.NewLine +
+                    $"-{nameof(WithUrlEncoder)}.");
+            }
         }
 
         /// <summary>
-        /// Checks whether enough dependencies were supplied to build a new token.
+        /// Checks whether enough dependencies were supplied to encode a new token.
         /// </summary>
-        private bool CanBuild() =>
-            _algorithm != null &&
-            _serializer != null &&
-            _urlEncoder != null &&
-            _jwt.Payload != null &&
-            (_algorithm.IsAsymmetric || HasOnlyOneSecret());
+        private bool CanEncode() =>
+            (_algorithm is object || _algFactory is object) &&
+            _serializer is object &&
+            _urlEncoder is object &&
+            _jwt.Payload is object;
 
         /// <summary>
         /// Checks whether enough dependencies were supplied to decode a token.
         /// </summary>
         private bool CanDecode()
         {
-            if (_serializer != null &&
-                _dateTimeProvider != null &&
-                _urlEncoder != null)
-            {
-                return !_verify || (_algorithm?.IsAsymmetric ?? true) || HasSecrets();
-            }
+            if (_urlEncoder is null)
+                return false;
 
-            return false;
+            if (_verify)
+                return _validator is object && (_algorithm is object || _algFactory is object);
+
+            return true;
         }
-
-        /// <summary>
-        /// Checks if any secret was supplied to use in token decoding
-        /// </summary>
-        private bool HasSecrets() =>
-            _secrets != null && _secrets.Length > 0;
-
-        /// <summary>
-        /// Checks if there is only one secret was supplied for token encoding
-        /// </summary>
-        /// <returns></returns>
-        private bool HasOnlyOneSecret() =>
-            _secrets != null && _secrets.Length == 1;
     }
 }

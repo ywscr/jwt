@@ -2,15 +2,16 @@
 using AutoFixture;
 using FluentAssertions;
 using JWT.Builder;
-using Xunit;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace JWT.Tests.Common
+namespace JWT.Tests
 {
+    [TestClass]
     public class JwtDataTests
     {
-        private readonly Fixture _fixture = new Fixture();
+        private static readonly Fixture _fixture = new Fixture();
 
-        [Fact]
+        [TestMethod]
         public void JwtData_With_Ctor_Params()
         {
             var headers = _fixture.Create<Dictionary<string, object>>();
@@ -20,11 +21,11 @@ namespace JWT.Tests.Common
 
             jwtData.Header
                    .Should()
-                   .Contain(headers, "because the DTO's header must match the one provided");
+                   .Contain(headers, "because header must match the one provided");
 
             jwtData.Payload
                    .Should()
-                   .Contain(payload, "because the DTO's payload must match the one provided");
+                   .Contain(payload, "because payload must match the one provided");
         }
     }
 }

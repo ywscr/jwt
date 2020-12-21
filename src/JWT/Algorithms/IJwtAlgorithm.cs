@@ -16,10 +16,18 @@ namespace JWT.Algorithms
         /// Gets algorithm name.
         /// </summary>
         string Name { get; }
+    }
 
+    /// <summary>
+    /// Extension methods for <seealso cref="IJwtAlgorithm" />
+    ///</summary>
+    public static class JwtAlgorithmExtensions
+    {
         /// <summary>
-        /// Indicates whether algorithm is asymmetric or not.
+        /// Returns whether or not the algorithm is asymmetric.
         /// </summary>
-        bool IsAsymmetric { get; }
+        /// <param name="alg">The algorithm instance.</param>
+        public static bool IsAsymmetric(this IJwtAlgorithm alg) =>
+            alg is IAsymmetricAlgorithm;
     }
 }

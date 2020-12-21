@@ -29,28 +29,22 @@ namespace JWT
         }
 
         /// <inheritdoc />
-        public string Encode(object payload, string key) =>
-            Encode(null, payload, key != null ? GetBytes(key) : null);
-
-        /// <inheritdoc />
-        public string Encode(object payload, byte[] key) =>
-            Encode(null, payload, key);
-
-        /// <inheritdoc />
-        public string Encode(IDictionary<string, object> extraHeaders, object payload, string key) =>
-            Encode(extraHeaders, payload, GetBytes(key));
-
-        /// <inheritdoc />
         /// <exception cref="ArgumentNullException" />
         public string Encode(IDictionary<string, object> extraHeaders, object payload, byte[] key)
         {
             if (payload is null)
                 throw new ArgumentNullException(nameof(payload));
+            if (!_algorithm.IsAsymmetric() && key is null)
+                throw new ArgumentNullException(nameof(key));
 
             var segments = new List<string>(3);
 
-            var header = extraHeaders is null ? new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase) : new Dictionary<string, object>(extraHeaders, StringComparer.OrdinalIgnoreCase);
-            header.Add("typ", "JWT");
+            var header = extraHeaders is null ?
+                new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase) :
+                new Dictionary<string, object>(extraHeaders, StringComparer.OrdinalIgnoreCase);
+            
+            if (!header.ContainsKey("typ"))
+                header.Add("typ", "JWT");
             header.Add("alg", _algorithm.Name);
 
             var headerBytes = GetBytes(_jsonSerializer.Serialize(header));

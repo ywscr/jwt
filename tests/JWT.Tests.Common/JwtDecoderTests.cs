@@ -1,324 +1,458 @@
-using AutoFixture;
 using System;
+using System.Collections.Generic;
+using AutoFixture;
 using FluentAssertions;
 using JWT.Algorithms;
+using JWT.Builder;
+using JWT.Exceptions;
 using JWT.Serializers;
-using JWT.Tests.Common.Internal;
-using JWT.Tests.Common.Models;
-using Xunit;
+using JWT.Tests.Models;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Moq;
 
-namespace JWT.Tests.Common
+namespace JWT.Tests
 {
+    [TestClass]
     public class JwtDecoderTests
     {
-        private readonly Fixture _fixture = new Fixture();
+        private static readonly Fixture _fixture = new Fixture();
 
-        [Fact]
-        public void Decode_Should_Decode_Token_To_Json_Encoded_String()
+        [TestMethod]
+        public void DecodeHeader_Should_Return_Header()
         {
-            var key = _fixture.Create<string>();
-            const string token = TestData.Token;
-            var toSerialize = TestData.Customer;
+            const string token = TestData.TokenByAsymmetricAlgorithm;
 
             var serializer = new JsonNetSerializer();
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, null, urlEncoder);
+            var decoder = new JwtDecoder(serializer, urlEncoder);
 
-            var actual = decoder.Decode(token, key, verify: false);
-            var expected = serializer.Serialize(toSerialize);
+            var header = decoder.DecodeHeader(token);
 
-            actual.Should()
-                .Be(expected, "because the provided object should be correctly serialized in the token");
+            header.Should()
+                  .NotBeNullOrEmpty("because decoding header should be possible without validator or algorithm");
         }
 
-        [Fact]
-        public void Decode_Should_Decode_Token_To_Json_Encoded_String_Multiple_Secrets()
+        [TestMethod]
+        public void DecodeHeaderToDictionary_Should_Return_Header()
         {
-            var keys = _fixture.Create<string[]>();
-            const string token = TestData.Token;
-            var toSerialize = TestData.Customer;
+            const string token = TestData.TokenByAsymmetricAlgorithm;
 
             var serializer = new JsonNetSerializer();
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, null, urlEncoder);
+            var decoder = new JwtDecoder(serializer, urlEncoder);
 
-            var actual = decoder.Decode(token, keys, verify: false);
-            var expected = serializer.Serialize(toSerialize);
+            var header = decoder.DecodeHeaderToDictionary(token);
+
+            header.Should()
+                  .NotBeNull("because decoding header should be possible without validator or algorithm");
+
+            header.Should()
+                  .Contain("typ", "JWT");
+            header.Should()
+                  .Contain("alg", "RS256");
+            header.Should()
+                  .Contain("kid", TestData.ServerRsaPublicThumbprint1);
+        }
+
+        [TestMethod]
+        public void DecodeHeader_To_JwtHeader_Should_Return_Header()
+        {
+            const string token = TestData.TokenByAsymmetricAlgorithm;
+
+            var serializer = new JsonNetSerializer();
+            var urlEncoder = new JwtBase64UrlEncoder();
+            var decoder = new JwtDecoder(serializer, urlEncoder);
+
+            var header = decoder.DecodeHeader<JwtHeader>(token);
+
+            header.Should()
+                  .NotBeNull("because decoding header should be possible without validator or algorithm");
+
+            header.Type
+                  .Should()
+                  .Be("JWT");
+            header.Algorithm
+                  .Should()
+                  .Be("RS256");
+            header.KeyId
+                  .Should()
+                  .Be(TestData.ServerRsaPublicThumbprint1);
+        }
+
+        [TestMethod]
+        public void DecodeHeader_To_Dictionary_Should_Return_Header()
+        {
+            const string token = TestData.TokenByAsymmetricAlgorithm;
+
+            var serializer = new JsonNetSerializer();
+            var urlEncoder = new JwtBase64UrlEncoder();
+            var decoder = new JwtDecoder(serializer, urlEncoder);
+
+            var header = decoder.DecodeHeader<Dictionary<string, string>>(token);
+
+            header.Should()
+                  .NotBeNull("because decoding header should be possible without validator or algorithm");
+
+            header.Should()
+                  .Contain("typ", "JWT")
+                  .And.Contain("alg", "RS256")
+                  .And.Contain("kid", TestData.ServerRsaPublicThumbprint1);
+        }
+
+        [TestMethod]
+        public void Decode_Should_Decode_Token_To_Json_String()
+        {
+            const string key = TestData.Secret;
+            const string token = TestData.Token;
+            var payload = TestData.Customer;
+
+            var serializer = new JsonNetSerializer();
+            var dateTimeProvider = new UtcDateTimeProvider();
+            var validator = new JwtValidator(serializer, dateTimeProvider);
+            var urlEncoder = new JwtBase64UrlEncoder();
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
+
+            var actual = decoder.Decode(token, key, verify: true);
+
+            var expected = serializer.Serialize(payload);
+            actual.Should()
+                  .Be(expected, "because the provided object should be correctly serialized in the token");
+        }
+
+        [TestMethod]
+        public void Decode_With_Multiple_Secrets_Should_Return_Token()
+        {
+            const string key = TestData.Secret;
+            const string token = TestData.Token;
+            var payload = TestData.Customer;
+
+            var serializer = new JsonNetSerializer();
+            var dateTimeProvider = new UtcDateTimeProvider();
+            var validator = new JwtValidator(serializer, dateTimeProvider);
+            var urlEncoder = new JwtBase64UrlEncoder();
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
+
+            var actual = decoder.Decode(token, new[] { key }, verify: true);
+
+            var expected = serializer.Serialize(payload);
+            actual.Should()
+                  .Be(expected, "because the provided object should be correctly serialized in the token");
+        }
+
+        [TestMethod]
+        public void Decode_Should_Call_Custom_AlgorithmFactory()
+        {
+            const string token = TestData.TokenByAsymmetricAlgorithm;
+
+            var factory = new Mock<IAlgorithmFactory>();
+            factory.Setup(f => f.Create(It.IsAny<JwtDecoderContext>()))
+                   .Returns(TestData.RS256Algorithm)
+                   .Verifiable("because custom algorithm factory must be called");
+
+            var serializer = new JsonNetSerializer();
+            var dateTimeProvider = new UtcDateTimeProvider();
+            var validator = new JwtValidator(serializer, dateTimeProvider);
+            var urlEncoder = new JwtBase64UrlEncoder();
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, factory.Object);
+
+            decoder.Decode(token, (byte[][])null, verify: true);
+
+            factory.VerifyAll();
+        }
+
+        [TestMethod]
+        public void Decode_Without_VerifySignature_And_Without_Algorithm_Should_Return_Token()
+        {
+            const string token = TestData.Token;
+            var payload = TestData.Customer;
+
+            var serializer = new JsonNetSerializer();
+            var urlEncoder = new JwtBase64UrlEncoder();
+
+            var decoder = new JwtDecoder(serializer, urlEncoder);
+
+            var actual = decoder.Decode(token);
+            var expected = serializer.Serialize(payload);
 
             actual.Should()
                   .Be(expected, "because the provided object should be correctly serialized in the token");
         }
 
-        [Fact]
+        [TestMethod]
         public void DecodeToObject_Should_Decode_Token_To_Dictionary()
         {
             var expected = TestData.DictionaryPayload;
-            var key = _fixture.Create<string>();
+            const string key = TestData.Secret;
             const string token = TestData.Token;
 
             var serializer = new JsonNetSerializer();
+            var dateTimeProvider = new UtcDateTimeProvider();
+            var validator = new JwtValidator(serializer, dateTimeProvider);
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, null, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
-            var actual = decoder.DecodeToObject(token, key, verify: false);
+            var actual = decoder.DecodeToObject(token, key, verify: true);
 
             actual.Should()
                   .Equal(expected, "because the JWT should have been correctly deserialized to the correct object");
         }
 
-        [Fact]
+        [TestMethod]
         public void DecodeToObject_Should_Decode_Token_To_Dictionary_Multiple_Secrets()
         {
             var expected = TestData.DictionaryPayload;
-            var keys = _fixture.Create<string[]>();
+            const string key = TestData.Secret;
             const string token = TestData.Token;
 
             var serializer = new JsonNetSerializer();
+            var dateTimeProvider = new UtcDateTimeProvider();
+            var validator = new JwtValidator(serializer, dateTimeProvider);
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, null, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
-            var actual = decoder.DecodeToObject(token, keys, verify: false);
+            var actual = decoder.DecodeToObject(token, new[] { key }, verify: true);
 
             actual.Should()
                   .Equal(expected, "because the JWT should have been correctly deserialized to the correct object");
         }
 
-        [Fact]
+        [TestMethod]
         public void DecodeToObject_Should_Decode_Token_To_Generic_Type()
         {
             var expected = TestData.Customer;
-            var key = _fixture.Create<string>();
+            const string key = TestData.Secret;
             const string token = TestData.Token;
 
             var serializer = new JsonNetSerializer();
+            var dateTimeProvider = new UtcDateTimeProvider();
+            var validator = new JwtValidator(serializer, dateTimeProvider);
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, null, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
-            var actual = decoder.DecodeToObject<Customer>(token, key, verify: false);
+            var actual = decoder.DecodeToObject<Customer>(token, key, verify: true);
 
             actual.Should()
                   .BeEquivalentTo(expected, "because the JWT should have been correctly deserialized to the same customer object");
         }
 
-        [Fact]
-        public void DecodeToObject_Should_Decode_Token_To_Generic_Type_Multiple_Secrets()
+        [TestMethod]
+        public void DecodeToObject_Should_Decode_Token_To_Generic_Type_With_Multiple_Secrets()
         {
-            var expected = TestData.Customer;
-            var keys = _fixture.Create<string[]>();
+            const string key = TestData.Secret;
             const string token = TestData.Token;
 
             var serializer = new JsonNetSerializer();
+            var dateTimeProvider = new UtcDateTimeProvider();
+            var validator = new JwtValidator(serializer, dateTimeProvider);
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, null, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
-            var actual = decoder.DecodeToObject<Customer>(token, keys, verify: false);
+            var actual = decoder.DecodeToObject<Customer>(token, new[] { key }, verify: true);
 
             actual.Should()
-                  .BeEquivalentTo(expected, "because the JWT should have been correctly deserialized to the same customer object");
+                  .BeEquivalentTo(TestData.Customer, "because the JWT should have been correctly deserialized to the same customer object");
         }
 
-        [Fact]
+        [TestMethod]
         public void DecodeToObject_Should_Throw_Exception_On_Malformed_Token()
         {
-            const string badToken = TestData.MalformedToken;
-            var key = _fixture.Create<string>();
+            const string badToken = TestData.TokenWithoutHeader;
+            const string key = TestData.Secret;
 
             var serializer = new JsonNetSerializer();
+            var dateTimeProvider = new UtcDateTimeProvider();
+            var validator = new JwtValidator(serializer, dateTimeProvider);
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, null, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
-            Action decodeInvalidJwt =
-                () => decoder.DecodeToObject<Customer>(badToken, key, verify: false);
+            Action action =
+                () => decoder.DecodeToObject<Customer>(badToken, key, verify: true);
 
-            decodeInvalidJwt.Should()
-                            .Throw<InvalidTokenPartsException>("because the provided token does not contains the required three parts");
+            action.Should()
+                  .Throw<InvalidTokenPartsException>("because the provided token does not contains the required three parts");
         }
 
-        [Fact]
-        public void DecodeToObject_Should_Throw_Exception_On_Malformed_Token_Multiple_Secrets()
+        [TestMethod]
+        public void DecodeToObject_Should_Throw_Exception_On_Malformed_Token_With_Multiple_Secrets()
         {
-            const string badToken = TestData.MalformedToken;
-            var keys = _fixture.Create<string[]>();
+            const string badToken = TestData.TokenWithoutHeader;
+            var keys = new[] { TestData.Secret, TestData.Secret2 };
 
             var serializer = new JsonNetSerializer();
+            var dateTimeProvider = new UtcDateTimeProvider();
+            var validator = new JwtValidator(serializer, dateTimeProvider);
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, null, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
-            Action decodeInvalidJwtWithMultipleKeys =
-                () => decoder.DecodeToObject<Customer>(badToken, keys, verify: false);
+            Action action =
+                () => decoder.DecodeToObject<Customer>(badToken, keys, verify: true);
 
-            decodeInvalidJwtWithMultipleKeys.Should()
-                                            .Throw<InvalidTokenPartsException>("because the provided token does not contains the required three parts");
+            action.Should()
+                  .Throw<InvalidTokenPartsException>("because the provided token does not contains the required three parts");
         }
 
-        [Fact]
+        [TestMethod]
         public void DecodeToObject_Should_Throw_Exception_On_Invalid_Key()
         {
             const string token = TestData.Token;
             var key = _fixture.Create<string>();
 
             var serializer = new JsonNetSerializer();
-            var validTor = new JwtValidator(serializer, new UtcDateTimeProvider());
+            var validator = new JwtValidator(serializer, new UtcDateTimeProvider());
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, validTor, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
-            Action decodeJwtWithWrongKey =
+            Action action =
                 () => decoder.DecodeToObject<Customer>(token, key, verify: true);
 
-            decodeJwtWithWrongKey.Should()
-                                 .Throw<SignatureVerificationException>("because providing the wrong key must raise an error when the signature is verified");
+            action.Should()
+                  .Throw<SignatureVerificationException>("because providing the wrong key must raise an error when the signature is verified");
         }
 
-        [Fact]
+        [TestMethod]
         public void DecodeToObject_Should_Throw_Exception_On_Invalid_Key_Multiple_Secrets()
         {
             const string token = TestData.Token;
             var keys = _fixture.Create<string[]>();
 
             var serializer = new JsonNetSerializer();
-            var validTor = new JwtValidator(serializer, new UtcDateTimeProvider());
+            var validator = new JwtValidator(serializer, new UtcDateTimeProvider());
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, validTor, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
-            Action decodeJwtWithWrongKey =
+            Action action =
                 () => decoder.DecodeToObject<Customer>(token, keys, verify: true);
 
-            decodeJwtWithWrongKey.Should()
-                                 .Throw<SignatureVerificationException>("because providing the wrong key must raise an error when the signature is verified");
+            action.Should()
+                  .Throw<SignatureVerificationException>("because providing the wrong key must raise an error when the signature is verified");
         }
 
-        [Fact]
+        [TestMethod]
         public void DecodeToObject_Should_Throw_Exception_On_Invalid_Expiration_Claim()
         {
-            var key = _fixture.Create<string>();
+            const string key = TestData.Secret;
 
             var serializer = new JsonNetSerializer();
             var validator = new JwtValidator(serializer, new UtcDateTimeProvider());
 
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, validator, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
-            var encoder = new JwtEncoder(new HMACSHA256Algorithm(), serializer, urlEncoder);
+            var encoder = new JwtEncoder(TestData.HMACSHA256Algorithm, serializer, urlEncoder);
             var token = encoder.Encode(new { exp = _fixture.Create<string>() }, key);
 
-            Action encodeJwtWithWrongExpField =
+            Action action =
                 () => decoder.DecodeToObject<Customer>(token, key, verify: true);
 
-            encodeJwtWithWrongExpField.Should()
-                                      .Throw<SignatureVerificationException>("because the invalid 'exp' must result in an exception on decoding");
+            action.Should()
+                  .Throw<SignatureVerificationException>("because the invalid 'exp' must result in an exception on decoding");
         }
 
-        [Fact]
+        [TestMethod]
         public void DecodeToObject_Should_Throw_Exception_On_Invalid_Expiration_Claim_MultipleKeys()
         {
-            var key = _fixture.Create<string>();
-            var keys = _fixture.Create<string[]>();
-            keys[0] = key;
+            const string key = TestData.Secret;
 
             var serializer = new JsonNetSerializer();
             var validator = new JwtValidator(serializer, new UtcDateTimeProvider());
 
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, validator, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
-            var encoder = new JwtEncoder(new HMACSHA256Algorithm(), serializer, urlEncoder);
+            var encoder = new JwtEncoder(TestData.HMACSHA256Algorithm, serializer, urlEncoder);
             var token = encoder.Encode(new { exp = _fixture.Create<string>() }, key);
 
-            Action encodeJwtWithWrongExpField =
-                () => decoder.DecodeToObject<Customer>(token, keys, verify: true);
+            Action action =
+                () => decoder.DecodeToObject<Customer>(token, new[] { key }, verify: true);
 
-            encodeJwtWithWrongExpField.Should()
-                                      .Throw<SignatureVerificationException>("because the invalid 'exp' must result in an exception on decoding");
+            action.Should()
+                  .Throw<SignatureVerificationException>("because the invalid 'exp' must result in an exception on decoding");
         }
 
-        [Fact]
+        [TestMethod]
         public void DecodeToObject_Should_Throw_Exception_On_Null_Expiration_Claim()
         {
-            var key = _fixture.Create<string>();
+            const string key = TestData.Secret;
 
             var serializer = new JsonNetSerializer();
             var validator = new JwtValidator(serializer, new UtcDateTimeProvider());
 
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, validator, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
-            var encoder = new JwtEncoder(new HMACSHA256Algorithm(), serializer, urlEncoder);
+            var encoder = new JwtEncoder(TestData.HMACSHA256Algorithm, serializer, urlEncoder);
             var token = encoder.Encode(new { exp = (object)null }, key);
 
-            Action encodeJwtWithNullExpField =
+            Action action =
                 () => decoder.DecodeToObject<Customer>(token, key, verify: true);
 
-            encodeJwtWithNullExpField.Should()
-                                     .Throw<SignatureVerificationException>()
-                                     .WithMessage("Claim 'exp' must be a number.", "because the invalid 'exp' must result in an exception on decoding");
+            action.Should()
+                  .Throw<SignatureVerificationException>()
+                  .WithMessage("Claim 'exp' must be a number.", "because the invalid 'exp' must result in an exception on decoding");
         }
 
-        [Fact]
+        [TestMethod]
         public void DecodeToObject_Should_Throw_Exception_On_Null_Expiration_Claim_MultipleKeys()
         {
-            var key = _fixture.Create<string>();
-            var keys = _fixture.Create<string[]>();
-            keys[0] = key;
+            const string key = TestData.Secret;
 
             var serializer = new JsonNetSerializer();
             var validator = new JwtValidator(serializer, new UtcDateTimeProvider());
 
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, validator, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
-            var encoder = new JwtEncoder(new HMACSHA256Algorithm(), serializer, urlEncoder);
+            var encoder = new JwtEncoder(TestData.HMACSHA256Algorithm, serializer, urlEncoder);
             var token = encoder.Encode(new { exp = (object)null }, key);
 
-            Action encodeJwtWithNullExpField =
-                () => decoder.DecodeToObject<Customer>(token, keys, verify: true);
+            Action action =
+                () => decoder.DecodeToObject<Customer>(token, new[] { key }, verify: true);
 
-            encodeJwtWithNullExpField.Should()
-                                     .Throw<SignatureVerificationException>()
-                                     .WithMessage("Claim 'exp' must be a number.", "because the invalid 'exp' must result in an exception on decoding");
+            action.Should()
+                  .Throw<SignatureVerificationException>()
+                  .WithMessage("Claim 'exp' must be a number.", "because the invalid 'exp' must result in an exception on decoding");
         }
 
-        [Fact]
+        [TestMethod]
         public void DecodeToObject_Should_Throw_Exception_On_Expired_Claim()
         {
-            var key = _fixture.Create<string>();
+            const string key = TestData.Secret;
             const int timeDelta = -1;
 
-            var algorithm = new HMACSHA256Algorithm();
             var dateTimeProvider = new UtcDateTimeProvider();
             var serializer = new JsonNetSerializer();
 
             var validator = new JwtValidator(serializer, dateTimeProvider);
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, validator, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
             var now = dateTimeProvider.GetNow();
             var exp = UnixEpoch.GetSecondsSince(now.AddHours(timeDelta));
 
-            var encoder = new JwtEncoder(algorithm, serializer, urlEncoder);
+            var encoder = new JwtEncoder(TestData.HMACSHA256Algorithm, serializer, urlEncoder);
             var token = encoder.Encode(new { exp }, key);
 
-            Action decodeExpiredJwt =
+            Action action =
                 () => decoder.DecodeToObject<Customer>(token, key, verify: true);
 
-            decodeExpiredJwt.Should()
-                            .Throw<TokenExpiredException>("because decoding an expired token should raise an exception when verified");
+            action.Should()
+                  .Throw<TokenExpiredException>("because decoding an expired token should raise an exception when verified");
         }
 
-        [Fact]
-        public void DecodeToObject_Should_DecodeToken_On_Exp_Claim_After_Year2038()
+        [TestMethod]
+        public void DecodeToObject_Should_Decode_Token_On_Exp_Claim_After_Year2038()
         {
-            var key = _fixture.Create<string>();
+            const string key = TestData.Secret;
             var dateTimeProvider = new UtcDateTimeProvider();
             var serializer = new JsonNetSerializer();
             var validator = new JwtValidator(serializer, dateTimeProvider);
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, validator, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
             // Why 2038? See https://en.wikipedia.org/wiki/Year_2038_problem
-            var post2038 = new DateTime(2038, 1, 19, 3, 14, 8, DateTimeKind.Utc);
-            var exp = (post2038 - new DateTime(1970, 1, 1)).TotalSeconds;
+            var exp = new DateTimeOffset(2038, 1, 19, 3, 14, 8, 0, TimeSpan.Zero).ToUnixTimeSeconds();
             var payload = new { exp };
-            var encoder = new JwtEncoder(new HMACSHA256Algorithm(), serializer, urlEncoder);
+            var encoder = new JwtEncoder(TestData.HMACSHA256Algorithm, serializer, urlEncoder);
             var validToken = encoder.Encode(payload, key);
 
             var expected = serializer.Serialize(payload);
@@ -328,69 +462,72 @@ namespace JWT.Tests.Common
                     .Be(actual, "because the token should be correctly decoded");
         }
 
-        [Fact]
+        [TestMethod]
         public void DecodeToObject_Should_Throw_Exception_Before_NotBefore_Becomes_Valid()
         {
             var serializer = new JsonNetSerializer();
             var dateTimeProvider = new UtcDateTimeProvider();
-            var validTor = new JwtValidator(serializer, dateTimeProvider);
+            var validator = new JwtValidator(serializer, dateTimeProvider);
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, validTor, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
             var now = dateTimeProvider.GetNow();
             var nbf = UnixEpoch.GetSecondsSince(now.AddHours(1));
 
-            var encoder = new JwtEncoder(new HMACSHA256Algorithm(), serializer, urlEncoder);
-            var token = encoder.Encode(new { nbf }, "ABC");
+            var encoder = new JwtEncoder(TestData.HMACSHA256Algorithm, serializer, urlEncoder);
+            var token = encoder.Encode(new { nbf }, TestData.Secret);
 
-            Action decodeNotActiveJwt =
-                () => decoder.DecodeToObject<Customer>(token, "ABC", verify: true);
+            Action action =
+                () => decoder.DecodeToObject<Customer>(token, TestData.Secret, verify: true);
 
-            decodeNotActiveJwt.Should()
-                              .Throw<SignatureVerificationException>();
+            action.Should()
+                  .Throw<SignatureVerificationException>();
         }
 
-        [Fact]
-        public void DecodeToObject_Should_Throw_Exception_On_Null_NotBefore_Claim()
-        {
-            var key = _fixture.Create<string>();
-
-            var serializer = new JsonNetSerializer();
-            var validator = new JwtValidator(serializer, new UtcDateTimeProvider());
-
-            var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, validator, urlEncoder);
-
-            var encoder = new JwtEncoder(new HMACSHA256Algorithm(), serializer, urlEncoder);
-            var token = encoder.Encode(new { nbf = (object)null }, key);
-
-            Action encodeJwtWithNullExpField =
-                () => decoder.DecodeToObject<Customer>(token, key, verify: true);
-
-            encodeJwtWithNullExpField.Should()
-                                     .Throw<SignatureVerificationException>()
-                                     .WithMessage("Claim 'nbf' must be a number.", "because the invalid 'nbf' must result in an exception on decoding");
-        }
-
-        [Fact]
+        [TestMethod]
         public void DecodeToObject_Should_Decode_Token_After_NotBefore_Becomes_Valid()
         {
             var dateTimeProvider = new UtcDateTimeProvider();
-            var key = _fixture.Create<string>();
+            const string key = TestData.Secret;
 
             var serializer = new JsonNetSerializer();
             var validator = new JwtValidator(serializer, new UtcDateTimeProvider());
 
             var urlEncoder = new JwtBase64UrlEncoder();
-            var decoder = new JwtDecoder(serializer, validator, urlEncoder);
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
 
             var now = dateTimeProvider.GetNow();
             var nbf = UnixEpoch.GetSecondsSince(now);
 
-            var encoder = new JwtEncoder(new HMACSHA256Algorithm(), serializer, urlEncoder);
+            var encoder = new JwtEncoder(TestData.HMACSHA256Algorithm, serializer, urlEncoder);
             var token = encoder.Encode(new { nbf }, key);
 
-            decoder.DecodeToObject<Customer>(token, key, verify: true);
+            var dic = decoder.DecodeToObject<Dictionary<string, object>>(token, key, verify: true);
+
+            dic.Should()
+               .Contain("nbf", nbf);
+        }
+
+        [TestMethod]
+        public void DecodeToObject_Should_Throw_Exception_On_Null_NotBefore_Claim()
+        {
+            const string key = TestData.Secret;
+
+            var serializer = new JsonNetSerializer();
+            var validator = new JwtValidator(serializer, new UtcDateTimeProvider());
+
+            var urlEncoder = new JwtBase64UrlEncoder();
+            var decoder = new JwtDecoder(serializer, validator, urlEncoder, TestData.HMACSHA256Algorithm);
+
+            var encoder = new JwtEncoder(TestData.HMACSHA256Algorithm, serializer, urlEncoder);
+            var token = encoder.Encode(new { nbf = (object)null }, key);
+
+            Action action =
+                () => decoder.DecodeToObject<Customer>(token, key, verify: true);
+
+            action.Should()
+                  .Throw<SignatureVerificationException>()
+                  .WithMessage("Claim 'nbf' must be a number.", "because the invalid 'nbf' must result in an exception on decoding");
         }
     }
 }

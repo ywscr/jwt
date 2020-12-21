@@ -8,14 +8,21 @@ variables:
   solution: 'JWT.sln'
   buildConfiguration: 'Release'
   buildPlatform: 'Any CPU'
-  coreVersion: '2.2.x'
-  nugetVersion: '5.2.0'
 
 steps:
-- task: DotNetCoreInstaller@1
-  displayName: Install .NET Core v$(coreVersion)
+- task: UseDotNet@2
+  displayName: 'Use .NET Core Core 2.2.x'
   inputs:
-      version: $(coreVersion)
+    packageType: sdk
+    version: '2.2.x'
+    installationPath: '$(Agent.ToolsDirectory)/dotnet'
+
+- task: UseDotNet@2
+  displayName: 'Use .NET Core Core 3.1.x'
+  inputs:
+    packageType: sdk
+    version: '3.1.x'
+    installationPath: '$(Agent.ToolsDirectory)/dotnet'
 
 - task: DotNetCoreCLI@2
   displayName: Restore NuGet packages for .NET Core
@@ -40,25 +47,25 @@ steps:
     arguments: '-c $(buildConfiguration) --no-restore'
 
 - task: DotNetCoreCLI@2
-  displayName: Run .NET Core tests
-  inputs:
-    command: 'test'
-    projects: 'tests/**/JWT.Tests.Core.csproj'
-    arguments: ' -c $(buildConfiguration) --no-build --no-restore'
-    testRunner: VSTest
-    testResultsFiles: '**/*.trx'
-    testResultsFormat: 'xUnit'
-    failTaskOnFailedTests: true
-
-- task: DotNetCoreCLI@2
   displayName: Run .NET Framework tests
   inputs:
     command: 'test'
-    projects: 'tests/**/JWT.Tests.NetFramework.csproj'
+    projects: 'tests/JWT.Tests.Net*/*.csproj'
     arguments: ' -c $(buildConfiguration) --no-build --no-restore'
-    testRunner: VSTest
+    testRunner: 'VSTest'
     testResultsFiles: '**/*.trx'
-    testResultsFormat: 'xUnit'
+    testResultsFormat: 'VSTest'
+    failTaskOnFailedTests: true
+
+- task: DotNetCoreCLI@2
+  displayName: Run .NET Core tests
+  inputs:
+    command: 'test'
+    projects: 'tests/JWT.Tests.Core*/*.csproj'
+    arguments: ' -c $(buildConfiguration) --no-build --no-restore'
+    testRunner: 'VSTest'
+    testResultsFiles: '**/*.trx'
+    testResultsFormat: 'VSTest'
     failTaskOnFailedTests: true
 
 - task: DotNetCoreCLI@2

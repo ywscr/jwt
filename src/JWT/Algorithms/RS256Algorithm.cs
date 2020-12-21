@@ -7,7 +7,7 @@ namespace JWT.Algorithms
     /// <summary>
     /// RSASSA-PKCS1-v1_5 using SHA-256
     /// </summary>
-    public sealed class RS256Algorithm : IJwtAlgorithm
+    public sealed class RS256Algorithm : IAsymmetricAlgorithm
     {
         private readonly RSA _publicKey;
         private readonly RSA _privateKey;
@@ -39,21 +39,24 @@ namespace JWT.Algorithms
         /// <summary>
         /// Creates an instance using the provided certificate.
         /// </summary>
-        /// <param name="cert">The certificate having both public and private keys.</param>
+        /// <param name="cert">The certificate having a public key and an optional private key.</param>
         public RS256Algorithm(X509Certificate2 cert)
-            : this(GetPublicKey(cert), GetPrivateKey(cert))
         {
+            _publicKey = GetPublicKey(cert) ?? throw new Exception("Certificate's PublicKey cannot be null.");
+            _privateKey = GetPrivateKey(cert);
         }
 
         /// <inheritdoc />
-        public string Name => JwtHashAlgorithm.RS256.ToString();
+        public string Name => JwtAlgorithmName.RS256.ToString();
 
         /// <inheritdoc />
-        public bool IsAsymmetric => true;
+        public byte[] Sign(byte[] key, byte[] bytesToSign)
+        {
+            if (_privateKey is null)
+                throw new InvalidOperationException("Can't sign data without private key");
 
-        /// <inheritdoc />
-        public byte[] Sign(byte[] key, byte[] bytesToSign) =>
-            _privateKey is object ? Sign(bytesToSign) : throw new InvalidOperationException("Can't sign data without private key");
+            return Sign(bytesToSign);
+        }
 
         /// <summary>
         /// Signs the provided bytes.
@@ -61,18 +64,25 @@ namespace JWT.Algorithms
         /// <param name="bytesToSign">The bytes to sign.</param>
         /// <returns>The signed bytes.</returns>
         public byte[] Sign(byte[] bytesToSign) =>
+#if NET35 || NET40
+            ((RSACryptoServiceProvider)_privateKey).SignData(bytesToSign, HashAlgorithmName.SHA256);
+#else
             _privateKey.SignData(bytesToSign, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+#endif
 
-        /// <summary>
-        /// Verifies provided byte array with provided signature.
-        /// </summary>
-        /// <param name="bytesToSign">The data to verify</param>
-        /// <param name="signature">The signature to verify with</param>
+        /// <inheritdoc />
         public bool Verify(byte[] bytesToSign, byte[] signature) =>
+#if NET35 || NET40
+            ((RSACryptoServiceProvider)_publicKey).VerifyData(bytesToSign, HashAlgorithmName.SHA256, signature);
+#else
             _publicKey.VerifyData(bytesToSign, signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+#endif
 
         private static RSA GetPrivateKey(X509Certificate2 cert)
         {
+            if (cert is null)
+                throw new ArgumentNullException(nameof(cert));
+
 #if NETSTANDARD1_3
             return cert.GetRSAPrivateKey();
 #else
@@ -82,6 +92,9 @@ namespace JWT.Algorithms
 
         private static RSA GetPublicKey(X509Certificate2 cert)
         {
+            if (cert is null)
+                throw new ArgumentNullException(nameof(cert));
+
 #if NETSTANDARD1_3
             return cert.GetRSAPublicKey();
 #else
